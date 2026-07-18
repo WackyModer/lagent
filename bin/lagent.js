@@ -5,12 +5,10 @@ const { chatHandoff } = require('../src/chat.js');
 const readline = require("readline");
 const path = require("path");
 
-const result = require("dotenv").config({path: path.join(__dirname, "..", ".env"),quiet: true});
+require("dotenv").config({path: path.join(__dirname, "..", ".env"),quiet: true});
 
 async function getModelSelection() {
-console.log(__dirname)
   const { models } = await ollama.list();
-console.log(result);
   return selectFromList({
     name: 'model',
     message: 'Select a model',
