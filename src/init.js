@@ -1,7 +1,9 @@
 const { Ollama } = require('ollama');
 const chalk = require('chalk');
 const { Select } = require('enquirer');
-require("dotenv").config({quiet: true});
+const path = require("path");
+
+const result = require("dotenv").config({path: path.join(__dirname, "..", ".env"),quiet: true});
 
 const ollama = new Ollama({
   host: process.env.OLLAMA_HOST || 'http://localhost:11434',
