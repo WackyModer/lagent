@@ -1,4 +1,4 @@
-#LAgent
+# LAgent
 ## A Lightweight Agentic AI Tool Focused On Programming
 
 Supports openrouter and locally hosted ollama models.
