@@ -206,7 +206,7 @@ function safeParseJSON(str) {
  * client errors often attach things like `error`, `status`, `response`).
  */
 function logDetailedError(context, err, extra = {}) {
-  console.error(chalk.red(`\n✖ ${context}`));
+  console.error(chalk.red(`\n[x] ${context}`));
 
   if (err instanceof Error) {
     console.error(chalk.red(`  name: ${err.name}`));
@@ -287,19 +287,19 @@ function buildSystemPrompt() {
  */
 async function runToolCalls(toolCalls) {
   const results = [];
-
+  console.log(chalk.blue("[>] Running tool calls..."));
   for (const call of toolCalls) {
     const name = call.function.name;
     const args = call.function.arguments;
     const handler = toolHandlers[name];
     const describe = toolDescribers[name];
-
-    console.log(chalk.gray(`  ↪ ${describe ? describe(args, chalk) : `calling ${chalk.yellow(name)}`}`));
+    // could use →
+    console.log(chalk.blueBright(`  [>] ${describe ? describe(args, chalk) : `calling ${chalk.yellow(name)}`}`));
 
     let output;
     if (!handler) {
       output = `Error: unknown tool "${name}"`;
-      console.error(chalk.red(`  ✖ No handler registered for tool "${name}"`));
+      console.error(chalk.red(`  [x] No handler registered for tool "${name}"`));
     } else {
       try {
         output = await handler(args);
@@ -369,7 +369,7 @@ async function runTurn(model, think, history, retriesLeft = 2) {
     currentAbortController = null;
     process.stdout.write('\n');
     if (abortController.signal.aborted) {
-      console.log(chalk.yellow('⚠ Generation cancelled.'));
+      console.log(chalk.yellow('[▲] Generation cancelled.'));
       return { done: false, aborted: true };
     }
     logDetailedError('Failed to start chat request', err);
@@ -422,19 +422,20 @@ async function runTurn(model, think, history, retriesLeft = 2) {
   });
 
   if (aborted) {
-    console.log(chalk.yellow('⚠ Generation cancelled by user.'));
+    console.log(chalk.yellow('[▲] Generation cancelled by user.'));
     return { done: false, aborted: true };
   }
 
   if (streamError) {
     if (retriesLeft <= 0) {
-      console.error(chalk.red('✖ Giving up after repeated malformed responses from the model.'));
+      console.error(chalk.red('[x] Giving up after repeated malformed responses from the model.'));
       return { done: false };
     }
 
     // The model likely emitted malformed tool-call syntax. Tell it what
     // went wrong and ask it to retry with valid JSON-style tool calls,
     // rather than silently dropping the turn and losing the user's request.
+    // THIS IS A UNICODE?? ↺
     console.log(chalk.gray(`  ↺ Asking the model to retry (${retriesLeft} retr${retriesLeft === 1 ? 'y' : 'ies'} left)...`));
 
     history.push({
@@ -461,7 +462,7 @@ async function runTurn(model, think, history, retriesLeft = 2) {
 
     if (completionCall) {
       const summary = completionCall.function.arguments && completionCall.function.arguments.summary;
-      console.log(chalk.green(`\n✔ Task complete: ${summary || '(no summary provided)'}`));
+      console.log(chalk.green(`\n[✓] Task complete: ${summary || '(no summary provided)'}`));
       return { done: true, summary };
     }
 
@@ -479,14 +480,14 @@ async function runTurn(model, think, history, retriesLeft = 2) {
  * keeps calling runTurn as long as it reports moreWork, with its own
  * internal cap so a single message can't loop forever either.
  */
-async function runSingleExchange(model, think, history, maxRounds = 10) {
+async function runSingleExchange(model, think, history, maxRounds = 20) {
   for (let round = 0; round < maxRounds; round++) {
     const result = await runTurn(model, think, history);
     if (!result || !result.moreWork) {
       return result;
     }
   }
-  console.log(chalk.yellow(`⚠ Stopped after ${maxRounds} tool-call rounds in a single exchange.`));
+  console.log(chalk.yellow(`[▲] Stopped after ${maxRounds} tool-call rounds in a single exchange.`));
   return { done: false, stoppedOnBudget: true };
 }
 
@@ -509,8 +510,8 @@ async function runSingleExchange(model, think, history, maxRounds = 10) {
  * @param {Array} history - conversation history, already seeded with the goal.
  * @param {number} maxSteps - hard cap on top-level turns, to avoid runaway loops.
  */
-async function runAgentLoop(model, think, history, goal, maxSteps = 40) {
-  console.log(chalk.gray(`\n▶ Starting autonomous run (max ${maxSteps} steps). Ctrl+C cancels the current step.\n`));
+async function runAgentLoop(model, think, history, goal, maxSteps = 100) {
+  console.log(chalk.gray(`\n[>] Starting autonomous run (max ${maxSteps} steps). Ctrl+C cancels the current step.\n`));
 
   for (let step = 1; step <= maxSteps; step++) {
     console.log(chalk.gray(`--- step ${step}/${maxSteps} ---`));
@@ -547,7 +548,7 @@ async function runAgentLoop(model, think, history, goal, maxSteps = 40) {
     });
   }
 
-  console.log(chalk.yellow(`\n⚠ Stopped after ${maxSteps} steps without the model calling task_complete.`));
+  console.log(chalk.yellow(`\n[▲] Stopped after ${maxSteps} steps without the model calling task_complete.`));
   console.log(chalk.yellow('  The task may be unfinished, stuck in a loop, or the model forgot to signal completion.'));
   return { done: false, stoppedOnBudget: true };
 }
