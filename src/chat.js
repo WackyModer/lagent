@@ -3,7 +3,7 @@ const os = require('os');
 const util = require('util');
 const { ollama, chalk } = require('./init.js');
 const { schemas: tools, handlers: toolHandlers, describers: toolDescribers, names: toolNames } = require('./tools');
-require("dotenv").config();
+require("dotenv").config({quiet: true});
 
 // Tracks the AbortController for whatever model request is currently in
 // flight, so SIGINT (Ctrl+C) can cancel just the generation instead of

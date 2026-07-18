@@ -6,15 +6,24 @@ const readline = require("readline");
 
 async function getModelSelection() {
   const { models } = await ollama.list();
-  
+
   return selectFromList({
     name: 'model',
     message: 'Select a model',
-    choices: models.map(model => ({
-      name: model.name,
-      message: model.name,
-      hint: `${model.details.parameter_size} • ${model.details.quantization_level}`,
-    })),
+    choices: models.map(model => {
+      const sizeGB = (model.size / (1024 ** 3)).toFixed(2);
+      const modified = new Date(model.modified_at).toLocaleDateString();
+      const family = model.details.family || 'unknown';
+      const paramSize = model.details.parameter_size || '?';
+      const quant = model.details.quantization_level || '?';
+      const format = model.details.format || '?';
+
+      return {
+        name: model.name,
+        message: model.name,
+        hint: `${paramSize} • ${quant} • ${format} • ${family} • ${sizeGB}GB • modified ${modified}`,
+      };
+    }),
   });
 }
 
