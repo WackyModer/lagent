@@ -6,7 +6,7 @@ const readline = require("readline");
 
 async function getModelSelection() {
   const { models } = await ollama.list();
-
+  
   return selectFromList({
     name: 'model',
     message: 'Select a model',
