@@ -3,7 +3,7 @@ const chalk = require('chalk');
 const { Select } = require('enquirer');
 require("dotenv").config();
 const ollama = new Ollama({
-  host: process.env.OLLAMA_HOST || 'http://10.1.10.2:11434',
+  host: process.env.OLLAMA_HOST || 'http://localhost:11434',
   // headers: { Authorization: 'Bearer ' + process.env.OLLAMA_API_KEY },
 });
 
