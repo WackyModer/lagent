@@ -1,7 +1,9 @@
-const fs = require('fs/promises');
-const { formatToolError } = require('./utils');
+import fs from 'fs/promises';
+import chalk from 'chalk';
+import { formatToolError } from './utils';
+import type { ToolModule } from '../types/common';
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -20,15 +22,18 @@ module.exports = {
     },
   },
 
-  async handler(args) {
+  async handler(args: Record<string, unknown>) {
+    const filePath = args.path as string;
     try {
-      return await fs.readFile(args.path, 'utf-8');
+      return await fs.readFile(filePath, 'utf-8');
     } catch (err) {
       return formatToolError('Error reading file', err);
     }
   },
 
-  describe(args, chalk) {
-    return `reading ${chalk.yellow(args.path)}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `reading ${chalk.yellow(args.path as string)}`;
   },
 };
+
+export = tool;

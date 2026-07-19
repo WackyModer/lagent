@@ -1,8 +1,10 @@
-const fs = require('fs/promises');
-const path = require('path');
-const { formatToolError, walkFiles, globToRegExp } = require('./utils');
+import fs from 'fs/promises';
+import path from 'path';
+import chalk from 'chalk';
+import { formatToolError, walkFiles, globToRegExp } from './utils';
+import type { ToolModule } from '../types/common';
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -29,31 +31,32 @@ module.exports = {
     },
   },
 
-  async handler(args) {
-    const directory = args.directory || '.';
+  async handler(args: Record<string, unknown>) {
+    const pattern = args.pattern as string;
+    const directory = (args.directory as string) || '.';
     const maxMatches = 200;
 
     try {
       let files = await walkFiles(directory);
 
       if (args.file_glob) {
-        const re = globToRegExp(args.file_glob);
+        const re = globToRegExp(args.file_glob as string);
         files = files.filter((f) => re.test(path.basename(f)));
       }
 
-      let pattern;
+      let regex: RegExp;
       try {
-        pattern = new RegExp(args.pattern);
+        regex = new RegExp(pattern);
       } catch {
-        pattern = new RegExp(args.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       }
 
-      const matches = [];
+      const matches: Array<{ file: string; line: number; text: string }> = [];
 
       for (const file of files) {
         if (matches.length >= maxMatches) break;
         const full = path.join(directory, file);
-        let content;
+        let content: string;
         try {
           content = await fs.readFile(full, 'utf-8');
         } catch {
@@ -63,7 +66,7 @@ module.exports = {
         const lines = content.split('\n');
         lines.forEach((line, idx) => {
           if (matches.length >= maxMatches) return;
-          if (pattern.test(line)) {
+          if (regex.test(line)) {
             matches.push({ file, line: idx + 1, text: line.trim().slice(0, 200) });
           }
         });
@@ -75,7 +78,9 @@ module.exports = {
     }
   },
 
-  describe(args, chalk) {
-    return `searching for ${chalk.yellow(args.pattern)} in ${chalk.yellow(args.directory || '.')}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `searching for ${chalk.yellow(args.pattern as string)} in ${chalk.yellow((args.directory as string) || '.')}`;
   },
 };
+
+export = tool;

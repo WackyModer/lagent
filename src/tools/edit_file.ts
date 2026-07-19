@@ -1,11 +1,13 @@
-const fs = require('fs/promises');
-const { formatToolError } = require('./utils');
+import fs from 'fs/promises';
+import chalk from 'chalk';
+import { formatToolError } from './utils';
+import type { ToolModule } from '../types/common';
 
-function normalizeNewlines(str) {
+function normalizeNewlines(str: string): string {
   return str.replace(/\r\n|\r/g, '\n');
 }
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -32,41 +34,46 @@ module.exports = {
     },
   },
 
-  async handler(args) {
+  async handler(args: Record<string, unknown>) {
+    const filePath = args.path as string;
+    const oldText = args.old_text as string;
+    const newText = args.new_text as string;
     try {
-      const rawContent = await fs.readFile(args.path, 'utf-8');
+      const rawContent = await fs.readFile(filePath, 'utf-8');
 
       // Detect original line-ending style so we can restore it on write.
       const usesCRLF = /\r\n/.test(rawContent);
 
       const content = normalizeNewlines(rawContent);
-      const oldText = normalizeNewlines(args.old_text);
-      const newText = normalizeNewlines(args.new_text);
+      const oldN = normalizeNewlines(oldText);
+      const newN = normalizeNewlines(newText);
 
-      const occurrences = content.split(oldText).length - 1;
+      const occurrences = content.split(oldN).length - 1;
 
       if (occurrences === 0) {
-        return `Error: old_text not found in ${args.path}`;
+        return `Error: old_text not found in ${filePath}`;
       }
       if (occurrences > 1) {
-        return `Error: old_text matches ${occurrences} times in ${args.path}; it must be unique. Include more surrounding context.`;
+        return `Error: old_text matches ${occurrences} times in ${filePath}; it must be unique. Include more surrounding context.`;
       }
 
-      let updated = content.replace(oldText, newText);
+      let updated = content.replace(oldN, newN);
 
       // Restore original line-ending convention.
       if (usesCRLF) {
         updated = updated.replace(/\n/g, '\r\n');
       }
 
-      await fs.writeFile(args.path, updated, 'utf-8');
-      return `Edited ${args.path} (1 replacement)`;
+      await fs.writeFile(filePath, updated, 'utf-8');
+      return `Edited ${filePath} (1 replacement)`;
     } catch (err) {
       return formatToolError('Error editing file', err);
     }
   },
 
-  describe(args, chalk) {
-    return `editing ${chalk.yellow(args.path)}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `editing ${chalk.yellow(args.path as string)}`;
   },
 };
+
+export = tool;

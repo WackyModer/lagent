@@ -1,6 +1,8 @@
-const { formatToolError, walkFiles, globToRegExp } = require('./utils');
+import chalk from 'chalk';
+import { formatToolError, walkFiles, globToRegExp } from './utils';
+import type { ToolModule } from '../types/common';
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -23,11 +25,12 @@ module.exports = {
     },
   },
 
-  async handler(args) {
-    const directory = args.directory || '.';
+  async handler(args: Record<string, unknown>) {
+    const pattern = args.pattern as string;
+    const directory = (args.directory as string) || '.';
     try {
       const files = await walkFiles(directory);
-      const re = globToRegExp(args.pattern);
+      const re = globToRegExp(pattern);
       const matched = files.filter((f) => re.test(f));
       return JSON.stringify(matched, null, 2);
     } catch (err) {
@@ -35,7 +38,9 @@ module.exports = {
     }
   },
 
-  describe(args, chalk) {
-    return `matching ${chalk.yellow(args.pattern)} in ${chalk.yellow(args.directory || '.')}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `matching ${chalk.yellow(args.pattern as string)} in ${chalk.yellow((args.directory as string) || '.')}`;
   },
 };
+
+export = tool;

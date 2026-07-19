@@ -1,4 +1,7 @@
-module.exports = {
+import chalk from 'chalk';
+import type { ToolModule } from '../types/common';
+
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -17,11 +20,13 @@ module.exports = {
     },
   },
 
-  async handler(args) {
+  async handler(args: Record<string, unknown>) {
     return `Task marked complete: ${args.summary}`;
   },
 
-  describe(args, chalk) {
-    return `marking task complete: ${chalk.yellow(args.summary)}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `marking task complete: ${chalk.yellow(args.summary as string)}`;
   },
 };
+
+export = tool;

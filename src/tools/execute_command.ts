@@ -1,4 +1,6 @@
-const { spawn, exec } = require('child_process');
+import { spawn, exec } from 'child_process';
+import chalk from 'chalk';
+import type { ToolModule } from '../types/common';
 
 /**
  * Kills an entire process tree rooted at `child`, across platforms.
@@ -14,7 +16,9 @@ const { spawn, exec } = require('child_process');
  * Best-effort: any failure to kill is swallowed so cancellation of the
  * await still proceeds.
  */
-function killProcessTree(child) {
+function killProcessTree(
+  child: { pid?: number | null; kill: (signal?: NodeJS.Signals | number) => boolean } | null
+): void {
   if (!child || child.pid == null) return;
   const pid = child.pid;
 
@@ -41,7 +45,7 @@ function killProcessTree(child) {
   }
 }
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -66,12 +70,13 @@ module.exports = {
    * tree is force-killed so the model's task is truly cancelled rather than
    * left running in the background.
    *
-   * @param {Object} args - { command }
-   * @param {AbortSignal} [signal] - Cancels the command when aborted.
+   * @param args - { command }
+   * @param signal - Cancels the command when aborted.
    */
-  async handler(args, signal) {
+  async handler(args: Record<string, unknown>, signal?: AbortSignal) {
+    const command = args.command as string;
     const isWin = process.platform === 'win32';
-    const child = spawn(args.command, {
+    const child = spawn(command, {
       shell: true,
       windowsHide: true,
       // On POSIX, detach so the child gets its own process group (pid ===
@@ -83,8 +88,8 @@ module.exports = {
     let stderr = '';
     let killedByUs = false;
 
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.stdout.on('data', (d: Buffer | string) => { stdout += d.toString(); });
+    child.stderr.on('data', (d: Buffer | string) => { stderr += d.toString(); });
 
     // If the caller aborts (Ctrl+C), tear down the whole process tree.
     if (signal) {
@@ -99,22 +104,22 @@ module.exports = {
       }
     }
 
-    const exitCode = await new Promise((resolve) => {
+    const exitCode = await new Promise<number | null>((resolve) => {
       child.on('error', () => resolve(null));
-      child.on('close', (code) => resolve(code));
+      child.on('close', (code: number | null) => resolve(code));
     });
 
     if (signal && signal.aborted) {
       // Treat cancellation as an explicit, surfaced outcome rather than
       // letting it bubble as a generic rejection.
-      const err = new Error('Command cancelled by user (Ctrl+C).');
+      const err = new Error('Command cancelled by user (Ctrl+C).') as Error & { killed?: boolean; aborted?: boolean };
       err.killed = true;
       err.aborted = true;
       throw err;
     }
 
     if (killedByUs) {
-      const err = new Error('Command killed by user (Ctrl+C).');
+      const err = new Error('Command killed by user (Ctrl+C).') as Error & { killed?: boolean; aborted?: boolean };
       err.killed = true;
       err.aborted = true;
       throw err;
@@ -127,7 +132,9 @@ module.exports = {
     });
   },
 
-  describe(args, chalk) {
-    return `running ${chalk.yellow(args.command)}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `running ${chalk.yellow(args.command as string)}`;
   },
 };
+
+export = tool;

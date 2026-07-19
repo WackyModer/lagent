@@ -1,25 +1,26 @@
-const fs = require('fs/promises');
-const path = require('path');
+import fs from 'fs/promises';
+import path from 'path';
 
 /**
  * Formats an error for inclusion in a tool result sent back to the model.
  * Includes name/code/message so the model has enough to self-correct.
  */
-function formatToolError(prefix, err) {
-  const parts = [`${prefix}: ${err.message}`];
-  if (err.code) parts.push(`code=${err.code}`);
-  if (err.errno) parts.push(`errno=${err.errno}`);
-  if (err.syscall) parts.push(`syscall=${err.syscall}`);
+function formatToolError(prefix: string, err: unknown): string {
+  const e = err as NodeJS.ErrnoException;
+  const parts = [`${prefix}: ${e.message}`];
+  if (e.code) parts.push(`code=${e.code}`);
+  if (e.errno) parts.push(`errno=${e.errno}`);
+  if (e.syscall) parts.push(`syscall=${e.syscall}`);
   return parts.join(' | ');
 }
 
-const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'build', '.next']);
+export const DEFAULT_IGNORE_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'build', '.next']);
 
 /**
  * Recursively walks a directory, yielding file paths (relative to root),
  * skipping common noisy directories.
  */
-async function walkFiles(root, dir = root, out = []) {
+async function walkFiles(root: string, dir: string = root, out: string[] = []): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -37,7 +38,7 @@ async function walkFiles(root, dir = root, out = []) {
 /**
  * Minimal glob-to-regex converter supporting *, **, and ?.
  */
-function globToRegExp(pattern) {
+function globToRegExp(pattern: string): RegExp {
   let re = '';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i];
@@ -60,9 +61,4 @@ function globToRegExp(pattern) {
   return new RegExp('^' + re + '$');
 }
 
-module.exports = {
-  formatToolError,
-  walkFiles,
-  globToRegExp,
-  DEFAULT_IGNORE_DIRS,
-};
+export { formatToolError, walkFiles, globToRegExp };

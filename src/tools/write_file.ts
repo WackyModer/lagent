@@ -1,8 +1,10 @@
-const fs = require('fs/promises');
-const path = require('path');
-const { formatToolError } = require('./utils');
+import fs from 'fs/promises';
+import path from 'path';
+import chalk from 'chalk';
+import { formatToolError } from './utils';
+import type { ToolModule } from '../types/common';
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -25,17 +27,21 @@ module.exports = {
     },
   },
 
-  async handler(args) {
+  async handler(args: Record<string, unknown>) {
+    const filePath = args.path as string;
+    const content = args.content as string;
     try {
-      await fs.mkdir(path.dirname(args.path), { recursive: true });
-      await fs.writeFile(args.path, args.content, 'utf-8');
-      return `Wrote ${Buffer.byteLength(args.content, 'utf-8')} bytes to ${args.path}`;
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, content, 'utf-8');
+      return `Wrote ${Buffer.byteLength(content, 'utf-8')} bytes to ${filePath}`;
     } catch (err) {
       return formatToolError('Error writing file', err);
     }
   },
 
-  describe(args, chalk) {
-    return `writing ${chalk.yellow(args.path)}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `writing ${chalk.yellow(args.path as string)}`;
   },
 };
+
+export = tool;

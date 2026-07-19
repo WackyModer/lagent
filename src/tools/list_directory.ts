@@ -1,8 +1,10 @@
-const fs = require('fs/promises');
-const path = require('path');
-const { formatToolError } = require('./utils');
+import fs from 'fs/promises';
+import path from 'path';
+import chalk from 'chalk';
+import { formatToolError } from './utils';
+import type { ToolModule } from '../types/common';
 
-module.exports = {
+const tool: ToolModule = {
   schema: {
     type: 'function',
     function: {
@@ -21,8 +23,8 @@ module.exports = {
     },
   },
 
-  async handler(args) {
-    const dirPath = args.path || '.';
+  async handler(args: Record<string, unknown>) {
+    const dirPath = (args.path as string) || '.';
     try {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
       const results = await Promise.all(
@@ -41,7 +43,9 @@ module.exports = {
     }
   },
 
-  describe(args, chalk) {
-    return `listing ${chalk.yellow(args.path || '.')}`;
+  describe(args: Record<string, unknown>, c: typeof chalk) {
+    return `listing ${chalk.yellow((args.path as string) || '.')}`;
   },
 };
+
+export = tool;
