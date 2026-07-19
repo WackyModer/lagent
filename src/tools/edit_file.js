@@ -1,6 +1,10 @@
 const fs = require('fs/promises');
 const { formatToolError } = require('./utils');
 
+function normalizeNewlines(str) {
+  return str.replace(/\r\n|\r/g, '\n');
+}
+
 module.exports = {
   schema: {
     type: 'function',
@@ -30,8 +34,16 @@ module.exports = {
 
   async handler(args) {
     try {
-      const content = await fs.readFile(args.path, 'utf-8');
-      const occurrences = content.split(args.old_text).length - 1;
+      const rawContent = await fs.readFile(args.path, 'utf-8');
+
+      // Detect original line-ending style so we can restore it on write.
+      const usesCRLF = /\r\n/.test(rawContent);
+
+      const content = normalizeNewlines(rawContent);
+      const oldText = normalizeNewlines(args.old_text);
+      const newText = normalizeNewlines(args.new_text);
+
+      const occurrences = content.split(oldText).length - 1;
 
       if (occurrences === 0) {
         return `Error: old_text not found in ${args.path}`;
@@ -40,7 +52,13 @@ module.exports = {
         return `Error: old_text matches ${occurrences} times in ${args.path}; it must be unique. Include more surrounding context.`;
       }
 
-      const updated = content.replace(args.old_text, args.new_text);
+      let updated = content.replace(oldText, newText);
+
+      // Restore original line-ending convention.
+      if (usesCRLF) {
+        updated = updated.replace(/\n/g, '\r\n');
+      }
+
       await fs.writeFile(args.path, updated, 'utf-8');
       return `Edited ${args.path} (1 replacement)`;
     } catch (err) {

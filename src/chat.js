@@ -1,11 +1,11 @@
 const readline = require('readline');
 const os = require('os');
 const util = require('util');
+const path = require('path');
 const { ollama, chalk } = require('./init.js');
 const { schemas: tools, handlers: toolHandlers, describers: toolDescribers, names: toolNames } = require('./tools');
-const path = require("path");
 
-require("dotenv").config({path: path.join(__dirname, "..", ".env"),quiet: true});
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 // Tracks the AbortController for whatever model request is currently in
 // flight, so SIGINT (Ctrl+C) can cancel just the generation instead of
@@ -13,51 +13,60 @@ require("dotenv").config({path: path.join(__dirname, "..", ".env"),quiet: true})
 // in a `finally` once the stream ends, however it ends.
 let currentAbortController = null;
 
-let globalProvider = null; // Global variable to store the selected provider
+// Tracks the AbortController for whatever tool/task the model is currently
+// running (e.g. a shell command via execute_command). When a generation
+// finishes and the model moves on to actually doing work, this is set so a
+// SIGINT (Ctrl+C) can cancel the in-progress task too — not just the model
+// run. Cleared once the tool batch completes, however it ends.
+let currentTaskAbortController = null;
+
+// Which backend chat() should talk to ('ollama' | 'openrouter'). Set once
+// by chatHandoff() at session start.
+let globalProvider = null;
+
+// ---------------------------------------------------------------------------
+// Provider adapters
+// ---------------------------------------------------------------------------
 
 function toOpenRouterMessages(history) {
-  return history.map(msg => {
-    const out = {
-      role: msg.role,
-    };
+  return history.map((msg) => {
+    const out = { role: msg.role };
 
-    if (typeof msg.content === "string") {
-      out.content = [
-        {
-          type: "text",
-          text: msg.content,
-        },
-      ];
-    } else {
-      out.content = msg.content;
-    }
+    out.content =
+      typeof msg.content === 'string'
+        ? [{ type: 'text', text: msg.content }]
+        : msg.content;
 
-    if (msg.tool_calls)
-      out.tool_calls = msg.tool_calls.map(tc => ({
+    if (msg.tool_calls) {
+      out.tool_calls = msg.tool_calls.map((tc) => ({
         id: tc.id,
-        type: tc.type || "function",
+        type: tc.type || 'function',
         function: {
           name: tc.function.name,
-          arguments: typeof tc.function.arguments === "string"
-            ? tc.function.arguments
-            : JSON.stringify(tc.function.arguments),
+          arguments:
+            typeof tc.function.arguments === 'string'
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments),
         },
       }));
+    }
 
-    if (msg.tool_call_id)
-      out.tool_call_id = msg.tool_call_id;
-
-    if (msg.name)
-      out.name = msg.name;
+    if (msg.tool_call_id) out.tool_call_id = msg.tool_call_id;
+    if (msg.name) out.name = msg.name;
 
     return out;
   });
 }
 
+/**
+ * Sends the conversation to the configured provider and returns an async
+ * iterator of streamed chunks shaped like Ollama's:
+ * { message: { role, content, tool_calls?, thinking? }, done }
+ */
 async function chat(model, history, tools, think, abortController) {
   let response;
 
-  if (globalProvider === "ollama") {
+  if (globalProvider === 'ollama') {
     response = await ollama.chat({
       model,
       messages: history,
@@ -67,14 +76,37 @@ async function chat(model, history, tools, think, abortController) {
       options: {
         num_predict: -1, // generate until the model stops or context fills
       },
-      signal: abortController.signal,
     });
-  } else if (globalProvider === "openrouter") {
-    const httpResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+
+    // Bridge our AbortController to ollama's own abort mechanism. The
+    // returned stream object (AbortableAsyncIterator) exposes its own
+    // .abort() method backed by its own internal controller — that's the
+    // only thing that actually stops the request. Without this, Ctrl+C
+    // during generation does nothing for the ollama provider.
+    //
+    // NOTE: this listener is registered up front, before the signal has
+    // fired, so it will correctly run exactly once whenever abort() is
+    // eventually called (whether that happens here or from the SIGINT
+    // handler in runTurn). Do NOT try to re-register a fresh listener
+    // from inside an abort handler — a signal that has already fired will
+    // silently ignore any listener added after the fact.
+    if (response && typeof response.abort === 'function') {
+      abortController.signal.addEventListener(
+        'abort',
+        () => {
+          try {
+            response.abort();
+          } catch {}
+        },
+        { once: true }
+      );
+    }
+  } else if (globalProvider === 'openrouter') {
+    const httpResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model,
@@ -82,20 +114,20 @@ async function chat(model, history, tools, think, abortController) {
         tools,
         stream: true,
         ...(think !== undefined && {
-          reasoning: { enabled: think == 'true' ? true : false },
+          reasoning: { enabled: think === 'true' },
         }),
       }),
       signal: abortController.signal,
     });
 
     if (!httpResponse.ok || !httpResponse.body) {
-      const errText = await httpResponse.text().catch(() => "");
+      const errText = await httpResponse.text().catch(() => '');
       throw new Error(`OpenRouter request failed: ${httpResponse.status} ${errText}`);
     }
 
     response = openRouterStreamToOllamaShape(httpResponse);
   } else {
-    throw new Error(`Unknown provider: ${provider}`);
+    throw new Error(`Unknown provider: ${globalProvider}`);
   }
 
   return response;
@@ -105,8 +137,8 @@ async function chat(model, history, tools, think, abortController) {
 // that yields chunks shaped like Ollama's: { message: { role, content, tool_calls }, done }
 async function* openRouterStreamToOllamaShape(httpResponse) {
   const reader = httpResponse.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
 
   // Accumulate partial tool_calls across deltas, since OpenAI-style
   // streaming sends tool call arguments incrementally by index.
@@ -118,16 +150,16 @@ async function* openRouterStreamToOllamaShape(httpResponse) {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
+      const lines = buffer.split('\n');
       buffer = lines.pop(); // keep last partial line in buffer
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
 
         const data = trimmed.slice(5).trim();
-        if (data === "[DONE]") {
-          yield { message: { role: "assistant", content: "" }, done: true };
+        if (data === '[DONE]') {
+          yield { message: { role: 'assistant', content: '' }, done: true };
           return;
         }
 
@@ -150,8 +182,8 @@ async function* openRouterStreamToOllamaShape(httpResponse) {
             const idx = tc.index ?? 0;
             const existing = toolCallAcc.get(idx) || {
               id: tc.id,
-              type: "function",
-              function: { name: "", arguments: "" },
+              type: 'function',
+              function: { name: '', arguments: '' },
             };
             if (tc.id) existing.id = tc.id;
             if (tc.function?.name) existing.function.name += tc.function.name;
@@ -163,8 +195,8 @@ async function* openRouterStreamToOllamaShape(httpResponse) {
         const isFinal = finishReason != null;
 
         const message = {
-          role: delta.role || "assistant",
-          content: delta.content ?? "",
+          role: delta.role || 'assistant',
+          content: delta.content ?? '',
         };
 
         // Include reasoning/thinking content if present (OpenRouter "reasoning" field)
@@ -175,7 +207,7 @@ async function* openRouterStreamToOllamaShape(httpResponse) {
         if (isFinal && toolCallAcc.size > 0) {
           message.tool_calls = Array.from(toolCallAcc.values()).map((tc) => ({
             id: tc.id,
-            type: "function",
+            type: 'function',
             function: {
               name: tc.function.name,
               arguments: safeParseJSON(tc.function.arguments),
@@ -201,6 +233,9 @@ function safeParseJSON(str) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
 
 /**
  * Logs an error with as much diagnostic detail as possible: message, name,
@@ -239,6 +274,10 @@ function logDetailedError(context, err, extra = {}) {
     console.error(chalk.red(`  context: ${util.inspect(extra, { depth: 4 })}`));
   }
 }
+
+// ---------------------------------------------------------------------------
+// System prompt
+// ---------------------------------------------------------------------------
 
 /**
  * Builds a system prompt describing the current environment so the
@@ -284,18 +323,32 @@ function buildSystemPrompt() {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Tool execution
+// ---------------------------------------------------------------------------
+
 /**
  * Runs all tool calls requested by the model and returns tool result messages.
+ *
+ * Cancellation: `signal` is the AbortSignal for this task batch. It is passed
+ * down to each tool handler so a SIGINT (Ctrl+C) can interrupt the model's
+ * task (e.g. kill a running shell command) rather than only the model run.
+ * If the signal fires mid-task, handlers are expected to reject/abort, and
+ * any thrown error here is reported back as a cancellation message.
+ *
+ * @param {Array} toolCalls - The tool calls the model requested.
+ * @param {AbortSignal} [signal] - Signal to cancel an in-progress task.
  */
-async function runToolCalls(toolCalls) {
+async function runToolCalls(toolCalls, signal) {
   const results = [];
-  console.log(chalk.blue("[>] Running tool calls..."));
+  console.log(chalk.blue('[>] Running tool calls...'));
+
   for (const call of toolCalls) {
     const name = call.function.name;
     const args = call.function.arguments;
     const handler = toolHandlers[name];
     const describe = toolDescribers[name];
-    // could use →
+
     console.log(chalk.blueBright(`  [>] ${describe ? describe(args, chalk) : `calling ${chalk.yellow(name)}`}`));
 
     let output;
@@ -304,31 +357,36 @@ async function runToolCalls(toolCalls) {
       console.error(chalk.red(`  [x] No handler registered for tool "${name}"`));
     } else {
       try {
-        output = await handler(args);
+        output = await handler(args, signal);
       } catch (err) {
-        // Tool modules are expected to catch their own errors and return a
-        // string; this covers anything that slips through (e.g. a bug
-        // in the handler itself, or a rejected promise it didn't await).
-        logDetailedError(`Unexpected error running tool "${name}"`, err, { args });
-        output = `Unexpected error running tool "${name}": ${err.message}`;
+        if (signal && signal.aborted) {
+          // The user cancelled the task via Ctrl+C. Report it back to the
+          // model so it knows its work was interrupted, but don't crash.
+          console.log(chalk.yellow(`  [▲] Task "${name}" cancelled by user.`));
+          output = `Task cancelled by user (Ctrl+C). The ${name} operation was interrupted and did not complete.`;
+        } else {
+          // Tool modules are expected to catch their own errors and return a
+          // string; this covers anything that slips through (e.g. a bug
+          // in the handler itself, or a rejected promise it didn't await).
+          logDetailedError(`Unexpected error running tool "${name}"`, err, { args });
+          output = `Unexpected error running tool "${name}": ${err.message}`;
+        }
       }
     }
 
-    // results.push({
-    //   role: 'tool',
-    //   content: typeof output === 'string' ? output : JSON.stringify(output),
-    // });
     results.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: typeof output === 'string'
-            ? output
-            : JSON.stringify(output),
+      role: 'tool',
+      tool_call_id: call.id,
+      content: typeof output === 'string' ? output : JSON.stringify(output),
     });
   }
 
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// Turn / exchange / agent loop
+// ---------------------------------------------------------------------------
 
 /**
  * Sends the current history to the model, streams its reply, and reports
@@ -354,26 +412,18 @@ async function runTurn(model, think, history, retriesLeft = 2) {
   currentAbortController = abortController;
 
   let response;
+
   try {
-    // response = await ollama.chat({
-    //   model,
-    //   messages: history,
-    //   think,
-    //   tools,
-    //   stream: true,
-    //   options: {
-    //     num_predict: -1, // generate until the model stops or context fills
-    //   },
-    //   signal: abortController.signal,
-    // });
     response = await chat(model, history, tools, think, abortController);
   } catch (err) {
     currentAbortController = null;
     process.stdout.write('\n');
+
     if (abortController.signal.aborted) {
       console.log(chalk.yellow('[▲] Generation cancelled.'));
       return { done: false, aborted: true };
     }
+
     logDetailedError('Failed to start chat request', err);
     return { done: false, failed: true };
   }
@@ -381,13 +431,33 @@ async function runTurn(model, think, history, retriesLeft = 2) {
   let streamError = null;
   let aborted = false;
 
+  // If Ctrl+C is pressed, immediately abort the underlying stream.
+  //
+  // FIX: previously this tried to *register a new* "abort" listener on
+  // abortController.signal from inside the abort handler itself. Since
+  // the signal has already fired by the time this callback runs, any
+  // listener added here would never be invoked (AbortSignal ignores
+  // listeners added after it has already fired) — so response.abort()
+  // was never actually called, and Ctrl+C did nothing.
+  //
+  // The real abort-forwarding is already wired up once, up front, inside
+  // chat() (see the addEventListener call there). All this handler needs
+  // to do is flip the local `aborted` flag; the abortController.abort()
+  // call below (triggered by the SIGINT handler) will fire that listener
+  // and call response.abort() for us. For the OpenRouter path, abort() is
+  // handled natively via the fetch `signal` option, so nothing extra is
+  // needed there either.
+  const onAbort = () => {
+    aborted = true;
+  };
+
+  abortController.signal.addEventListener('abort', onAbort, { once: true });
+
   try {
     for await (const part of response) {
       if (abortController.signal.aborted) {
-        aborted = true;
         break;
       }
-
       if (part.message.thinking) {
         process.stdout.write(chalk.gray(part.message.thinking));
       }
@@ -397,31 +467,34 @@ async function runTurn(model, think, history, retriesLeft = 2) {
         assistantContent += part.message.content;
       }
 
-      if (part.message.tool_calls && part.message.tool_calls.length > 0) {
-        toolCalls = toolCalls.concat(part.message.tool_calls);
+      if (part.message.tool_calls?.length) {
+        toolCalls.push(...part.message.tool_calls);
       }
     }
   } catch (err) {
-    if (abortController.signal.aborted || err.name === 'AbortError') {
+    if (aborted || abortController.signal.aborted || err?.name === 'AbortError') {
       aborted = true;
     } else {
       streamError = err;
       process.stdout.write('\n');
-      logDetailedError('Error while streaming model response', err, { assistantContentSoFar: assistantContent });
+      logDetailedError('Error while streaming model response', err, {
+        assistantContentSoFar: assistantContent,
+      });
     }
   } finally {
+    abortController.signal.removeEventListener('abort', onAbort);
     currentAbortController = null;
   }
 
   process.stdout.write('\n');
 
-  // Record whatever partial content/tool calls we got, so the
-  // conversation history stays consistent no matter how the turn ended.
-  history.push({
-    role: 'assistant',
-    content: assistantContent,
-    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-  });
+  if (!aborted) {
+    history.push({
+      role: 'assistant',
+      content: assistantContent,
+      ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+    });
+  }
 
   if (aborted) {
     console.log(chalk.yellow('[▲] Generation cancelled by user.'));
@@ -434,19 +507,18 @@ async function runTurn(model, think, history, retriesLeft = 2) {
       return { done: false };
     }
 
-    // The model likely emitted malformed tool-call syntax. Tell it what
-    // went wrong and ask it to retry with valid JSON-style tool calls,
-    // rather than silently dropping the turn and losing the user's request.
-    // THIS IS A UNICODE?? ↺
-    console.log(chalk.gray(`  ↺ Asking the model to retry (${retriesLeft} retr${retriesLeft === 1 ? 'y' : 'ies'} left)...`));
+    console.log(
+      chalk.gray(
+        `  ↺ Asking the model to retry (${retriesLeft} retr${retriesLeft === 1 ? 'y' : 'ies'} left)...`
+      )
+    );
 
     history.push({
       role: 'user',
       content: [
         'Your previous response could not be parsed due to a syntax error in a tool call',
         `(${streamError.message}).`,
-        'Please try again. If you need to call a tool, use the standard JSON tool-call format',
-        'with correctly closed braces/brackets — do not use XML-style tags.',
+        'Please try again. If you need to call a tool, use the standard JSON tool-call format with correctly closed braces/brackets.',
         'If you do not need a tool, just answer in plain text.',
       ].join(' '),
     });
@@ -454,23 +526,29 @@ async function runTurn(model, think, history, retriesLeft = 2) {
     return runTurn(model, think, history, retriesLeft - 1);
   }
 
-  if (toolCalls.length > 0) {
-    // Check for task_complete before running the rest of the tools, so an
-    // autonomous loop can stop immediately rather than doing another round.
+  if (toolCalls.length) {
     const completionCall = toolCalls.find((c) => c.function.name === 'task_complete');
 
-    const toolResults = await runToolCalls(toolCalls);
+    const taskAbortController = new AbortController();
+    currentTaskAbortController = taskAbortController;
+
+    let toolResults;
+    try {
+      toolResults = await runToolCalls(toolCalls, taskAbortController.signal);
+    } finally {
+      currentTaskAbortController = null;
+    }
+
     history.push(...toolResults);
 
     if (completionCall) {
       const summary = completionCall.function.arguments && completionCall.function.arguments.summary;
+
       console.log(chalk.green(`\n[✓] Task complete: ${summary || '(no summary provided)'}`));
+
       return { done: true, summary };
     }
 
-    // Signal that more work is pending; the caller decides whether/how to
-    // continue. Tool results are already in history, so the next runTurn
-    // call will pick them up on its own — no synthetic user message needed.
     return { done: false, moreWork: true };
   }
 
@@ -510,6 +588,7 @@ async function runSingleExchange(model, think, history, maxRounds = 20) {
  * @param {string} model
  * @param {string|boolean} think
  * @param {Array} history - conversation history, already seeded with the goal.
+ * @param {string} goal - the autonomous task's goal, used in the "keep going" nudge.
  * @param {number} maxSteps - hard cap on top-level turns, to avoid runaway loops.
  */
 async function runAgentLoop(model, think, history, goal, maxSteps = 100) {
@@ -543,7 +622,7 @@ async function runAgentLoop(model, think, history, goal, maxSteps = 100) {
     history.push({
       role: 'user',
       content: [
-        'Keep working on the goal:'+goal+' autonomously — do not wait for further input from me.',
+        `Keep working on the goal: ${goal} — autonomously, do not wait for further input from me.`,
         'Continue working on the task using the available tools.',
         'Call task_complete once it is fully finished, or if you are stuck, explain why and call task_complete anyway.',
       ].join(' '),
@@ -555,15 +634,19 @@ async function runAgentLoop(model, think, history, goal, maxSteps = 100) {
   return { done: false, stoppedOnBudget: true };
 }
 
+// ---------------------------------------------------------------------------
+// Interactive session
+// ---------------------------------------------------------------------------
+
 /**
  * Starts an interactive chat session with the given model.
  *
  * @param {string} model - The model name to chat with.
  * @param {string|boolean} think - Thinking effort ('low'|'medium'|'high') or false.
+ * @param {string} provider - Which backend to use ('ollama' | 'openrouter').
  */
 async function chatHandoff(model, think, provider) {
-
-  globalProvider = provider
+  globalProvider = provider;
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -571,41 +654,92 @@ async function chatHandoff(model, think, provider) {
     prompt: chalk.cyan('you › '),
   });
 
-  const history = [
-    { role: 'system', content: buildSystemPrompt() },
-  ];
+  const history = [{ role: 'system', content: buildSystemPrompt() }];
 
   console.log(chalk.gray(`\nChatting with ${model}. Type /exit or Ctrl+C to quit.`));
   console.log(chalk.gray(`Tools available: ${toolNames.join(', ')}.`));
   console.log(chalk.gray('Type /task <description> to run a multi-step task autonomously.'));
-  console.log(chalk.gray('Press Ctrl+C while the model is responding to cancel just that generation;'));
-  console.log(chalk.gray('press it again with nothing running to exit.\n'));
+  console.log(chalk.gray('Press Ctrl+C while the model is responding to cancel that generation, or while'));
+  console.log(chalk.gray('it is running a task (e.g. a shell command) to cancel that task; press it again'));
+  console.log(chalk.gray('with nothing running to exit.\n'));
   rl.prompt();
 
   // Ctrl+C handling:
-  //  - If a generation is in flight, cancel just that (via AbortController)
-  //    and leave the session running.
-  //  - If nothing is running, require a second Ctrl+C within 1s to exit,
+  //  - If a model generation is in flight, cancel just that (via
+  //    AbortController) and leave the session running.
+  //  - Else if the model is running a task (e.g. a shell command), cancel
+  //    that task (via currentTaskAbortController) and leave the session
+  //    running. This makes Ctrl+C cancel the model's work, not just its
+  //    output stream.
+  //  - Else (nothing running), require a second Ctrl+C within 1s to exit,
   //    so an accidental tap doesn't kill the whole session.
-  let lastSigintAt = 0;
+  //
+  // IMPORTANT: this deliberately does NOT rely on `process.on('SIGINT')` or
+  // `rl.on('SIGINT')`. When readline owns a TTY input stream, Ctrl+C is
+  // consumed by readline's own key-handling and only surfaces as a real
+  // SIGINT (or an 'SIGINT' event on the interface) while that interface is
+  // actively reading — i.e. NOT while it's paused. Since we call
+  // `rl.pause()` for the entire duration of a generation/task (exactly the
+  // moments we need to catch Ctrl+C), neither of those handlers reliably
+  // fires — this is a documented Node behavior, not a bug in this file.
+  //
+  // The fix is to put stdin into raw mode ourselves and read the Ctrl+C
+  // byte (0x03) directly off the stream. Raw mode + a manual 'data'
+  // listener works regardless of whether readline is paused, because it's
+  // listening at a lower level than readline's own line-reading logic.
+  let exiting = false;
 
-  const sigintHandler = () => {
-    if (currentAbortController) {
+  const handleInterrupt = () => {
+    // Cancel model generation
+    if (currentAbortController && !currentAbortController.signal.aborted) {
       currentAbortController.abort();
       return;
     }
 
-    const now = Date.now();
-    if (now - lastSigintAt < 1000) {
-      rl.close();
-    } else {
-      lastSigintAt = now;
-      console.log(chalk.gray('\n(Press Ctrl+C again to exit.)'));
-      rl.prompt();
+    // Cancel running tool
+    if (currentTaskAbortController && !currentTaskAbortController.signal.aborted) {
+      currentTaskAbortController.abort();
+      return;
+    }
+
+    // Nothing running -> double Ctrl+C exits
+    if (exiting) {
+      process.exit(0);
+    }
+
+    exiting = true;
+    console.log(chalk.gray('\n(Press Ctrl+C again to exit.)'));
+
+    setTimeout(() => {
+      exiting = false;
+    }, 1000);
+  };
+
+  const CTRL_C = '\u0003';
+  let rawModeEnabled = false;
+
+  const onStdinData = (chunk) => {
+    // chunk may be a Buffer or string depending on encoding; check both.
+    const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+    if (str.includes(CTRL_C)) {
+      handleInterrupt();
     }
   };
 
-  process.on('SIGINT', sigintHandler);
+  if (process.stdin.isTTY) {
+    // setRawMode lets us see Ctrl+C as raw byte 0x03 instead of the TTY
+    // driver turning it into a SIGINT that gets swallowed by readline.
+    process.stdin.setRawMode(true);
+    rawModeEnabled = true;
+  }
+  process.stdin.on('data', onStdinData);
+
+  // Still register the standard handlers too, as a fallback for
+  // non-TTY environments (piped input, some CI/test runners) where
+  // setRawMode isn't available and normal SIGINT delivery is unaffected
+  // by readline's pause state.
+  process.on('SIGINT', handleInterrupt);
+  rl.on('SIGINT', handleInterrupt);
 
   rl.on('line', async (line) => {
     const input = line.trim();
@@ -619,8 +753,6 @@ async function chatHandoff(model, think, provider) {
       rl.close();
       return;
     }
-
-    rl.pause();
 
     try {
       if (input.startsWith('/task ')) {
@@ -659,7 +791,14 @@ async function chatHandoff(model, think, provider) {
 
   return new Promise((resolve) => {
     rl.on('close', () => {
-      process.removeListener('SIGINT', sigintHandler);
+      process.stdin.removeListener('data', onStdinData);
+      if (rawModeEnabled) {
+        try {
+          process.stdin.setRawMode(false);
+        } catch {}
+      }
+      process.removeListener('SIGINT', handleInterrupt);
+      rl.removeListener('SIGINT', handleInterrupt);
       console.log(chalk.gray('\nChat ended.'));
       resolve();
     });

@@ -19,13 +19,20 @@ module.exports = {
     },
   },
 
-  async handler(args) {
+  async handler(args, signal) {
     try {
-      const res = await fetch(args.url, { redirect: 'follow' });
+      const res = await fetch(args.url, { redirect: 'follow', signal });
       const text = await res.text();
       const truncated = text.length > 20_000 ? text.slice(0, 20_000) + '\n...[truncated]' : text;
       return JSON.stringify({ status: res.status, body: truncated });
     } catch (err) {
+      // If the user cancelled via Ctrl+C, surface that distinctly rather
+      // than wrapping it as a generic fetch error.
+      if (signal && signal.aborted) {
+        const cancel = new Error('Fetch cancelled by user (Ctrl+C).');
+        cancel.aborted = true;
+        throw cancel;
+      }
       return formatToolError('Error fetching URL', err);
     }
   },
