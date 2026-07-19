@@ -560,7 +560,7 @@ async function runTurn(model, think, history, retriesLeft = 2) {
  * keeps calling runTurn as long as it reports moreWork, with its own
  * internal cap so a single message can't loop forever either.
  */
-async function runSingleExchange(model, think, history, maxRounds = 20) {
+async function runSingleExchange(model, think, history, maxRounds = 1000) {
   for (let round = 0; round < maxRounds; round++) {
     const result = await runTurn(model, think, history);
     if (!result || !result.moreWork) {
@@ -591,7 +591,7 @@ async function runSingleExchange(model, think, history, maxRounds = 20) {
  * @param {string} goal - the autonomous task's goal, used in the "keep going" nudge.
  * @param {number} maxSteps - hard cap on top-level turns, to avoid runaway loops.
  */
-async function runAgentLoop(model, think, history, goal, maxSteps = 100) {
+async function runAgentLoop(model, think, history, goal, maxSteps = 1000) {
   console.log(chalk.gray(`\n[>] Starting autonomous run (max ${maxSteps} steps). Ctrl+C cancels the current step.\n`));
 
   for (let step = 1; step <= maxSteps; step++) {
