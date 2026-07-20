@@ -2,7 +2,7 @@
   "name": "lagent",
   "version": "1.0.0",
   "description": "CLI AI coding companion for developers",
-  "author": "",
+  "author": "wackymoder",
   "type": "commonjs",
   "bin": {
     "lagent": "./dist/bin/lagent.js"
