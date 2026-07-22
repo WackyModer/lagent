@@ -69,10 +69,10 @@ async function openroutersuggested(): Promise<string> {
     message: 'Select what model you\'d like to use from our recommended list, or enter your own',
     choices: [
       { name: 'custom', message: 'Enter my own', hint: 'You must enter a model id like "google/gemma-4-31b-it:free"' },
-      { name: 'tencent/hy3:free', message: 'Hy3', hint: '44tps 262K, 21B/295B MoE leaves July 21st' },
       { name: 'google/gemma-4-31b-it:free', message: 'Gemma 4 31b', hint: '20tps 262K, 30.7b' },
       { name: 'nvidia/nemotron-3-ultra-550b-a55b:free', message: 'Nemotron 3 ultra 550b a55b', hint: '42tps 1M, 55B/550B MoE' },
       { name: 'nvidia/nemotron-3-super-120b-a12b:free', message: 'Nemotron 3 Super 120b a12b', hint: '93tps 1M, 12B/120B MoE' },
+      { name: 'poolside/laguna-s-2.1:free', message: 'Laguna S 2.1', hint: '71tps 262K, 8B/118 MoE' },
       { name: 'poolside/laguna-m.1:free', message: 'Laguna M.1', hint: '54tps 262K cont 32k out, ?B leaves July 28th' },
     ],
   });
