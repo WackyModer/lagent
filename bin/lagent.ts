@@ -2,6 +2,7 @@
 
 import readline from 'readline';
 import path from 'path';
+import { parseArgs } from 'util';
 import { ollama, chalk, selectFromList } from '../src/init';
 import { chatHandoff } from '../src/chat';
 
@@ -90,41 +91,83 @@ async function openrouterthinking(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const provider = await getProvider();
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      provider: { type: 'string' },
+      model: { type: 'string' },
+      thinking: { type: 'string' },
+      prompt: { type: 'string' },
+    },
+    allowPositionals: true,
+  });
+
+  const isBench = positionals[0] === 'bench';
+
+  let provider = values.provider as string | undefined;
+  let selected_model = values.model as string | undefined;
+  let thinkArg = values.thinking as string | undefined;
+  let promptArg = values.prompt as string | undefined;
+
+  if (!provider) {
+    provider = await getProvider();
+  }
+
   let think: string | boolean = false;
-  let selected_model: string | null = null;
+
   if (provider === 'ollama') {
-    selected_model = await getModelSelection();
+    if (!selected_model) {
+      selected_model = await getModelSelection();
+    }
     console.log('generating with ' + selected_model);
 
     const canThink = await supportsThinking(selected_model);
 
     if (canThink) {
-      think = await getEffortSelection();
+      if (thinkArg !== undefined) {
+        think = thinkArg === 'off' ? false : thinkArg === 'on' ? 'medium' : thinkArg;
+      } else {
+        think = await getEffortSelection();
+      }
       console.log(chalk.gray(`thinking effort: ${think}`));
     } else {
       console.log(chalk.gray('model does not support thinking, skipping'));
     }
   } else if (provider === 'openrouter') {
-    selected_model = await openroutersuggested();
-    think = true;
-    if (selected_model === 'custom') {
-      think = await openrouterthinking();
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-      process.stdin.resume();
-
-      selected_model = await new Promise<string>((resolve) => {
-        rl.question('Type selected model: ', (answer) => {
-          rl.close();
-          resolve(answer);
+    if (!selected_model) {
+      selected_model = await openroutersuggested();
+      think = true;
+      if (selected_model === 'custom') {
+        think = await openrouterthinking();
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
         });
-      });
+        process.stdin.resume();
+
+        selected_model = await new Promise<string>((resolve) => {
+          rl.question('Type selected model: ', (answer) => {
+            rl.close();
+            resolve(answer);
+          });
+        });
+      }
+    } else {
+      if (thinkArg !== undefined) {
+        think = thinkArg === 'on' || thinkArg === 'true';
+      } else {
+        think = true;
+      }
     }
   }
-  await chatHandoff(selected_model as string, think, provider as 'ollama' | 'openrouter');
+
+  await chatHandoff(
+    selected_model as string,
+    think,
+    provider as 'ollama' | 'openrouter',
+    promptArg,
+    isBench
+  );
 }
 
 main().catch(console.error);
